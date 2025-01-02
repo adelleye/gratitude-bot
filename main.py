@@ -12,6 +12,8 @@ from mvp_service import (
     get_weekly_entries, send_weekly_summary
 )
 import sqlite3
+from datetime import datetime
+import pytz
 
 app = Flask(__name__)
 
@@ -20,36 +22,81 @@ def get_all_active_users():
     Retrieve all active users from the database.
     
     Returns:
-        list: List of (phone_number, email) tuples for active users
+        list: List of (phone_number, email, timezone, preferred_time) tuples for active users
     """
     conn = sqlite3.connect("gratitude.db")
     c = conn.cursor()
-    c.execute("SELECT phone_number, email FROM users WHERE active = TRUE")
+    c.execute("""
+        SELECT phone_number, email, timezone, preferred_time 
+        FROM users 
+        WHERE active = TRUE
+    """)
     users = c.fetchall()
     conn.close()
     return users
 
-def daily_job():
+def should_send_prompt(user_timezone, preferred_time, force=False):
     """
-    Daily scheduled task that:
-    1. Generates a new gratitude prompt
-    2. Sends it to all active users via SMS
+    Check if it's time to send a prompt for a user in their timezone.
+    
+    Args:
+        user_timezone (str): User's timezone (e.g., 'America/New_York')
+        preferred_time (str): User's preferred time (e.g., '19:00')
+        force (bool): If True, bypass time check (for testing)
+    
+    Returns:
+        bool: True if it's time to send the prompt
     """
-    prompt = get_daily_prompt()
+    if force:
+        return True
+        
+    try:
+        # Get current time in user's timezone
+        tz = pytz.timezone(user_timezone)
+        current_time = datetime.now(tz)
+        
+        # Parse preferred time
+        preferred_hour, preferred_minute = map(int, preferred_time.split(':'))
+        
+        # Check if it's the right time (within 2 minute window)
+        return (current_time.hour == preferred_hour and 
+                abs(current_time.minute - preferred_minute) <= 2)
+    except Exception as e:
+        print(f"Error checking time for timezone {user_timezone}: {e}")
+        return False
+
+def daily_job(force=False):
+    """
+    Check each user's timezone and preferred time,
+    send prompts only to users where it's the right time.
+    
+    Args:
+        force (bool): If True, send to all users regardless of time (for testing)
+    """
     users = get_all_active_users()
-    for phone_number, _ in users:
-        send_sms(phone_number, prompt)
+    prompt = None  # Only generate prompt if needed
+    
+    for phone_number, email, timezone, preferred_time in users:
+        if should_send_prompt(timezone, preferred_time, force):
+            if prompt is None:  # Generate prompt only once
+                prompt = get_daily_prompt()
+            send_sms(phone_number, prompt)
 
 def weekly_job():
     """
-    Weekly scheduled task that:
-    1. Gets each user's entries from the past week
-    2. Sends a summary email to each active user
+    Send weekly summaries to users where it's Sunday at their preferred time.
     """
     users = get_all_active_users()
-    for phone_number, email in users:
-        entries = get_weekly_entries(phone_number)
-        send_weekly_summary(email, entries)
+    for phone_number, email, timezone, preferred_time in users:
+        try:
+            tz = pytz.timezone(timezone)
+            current_time = datetime.now(tz)
+            if (current_time.weekday() == 6 and  # Sunday
+                should_send_prompt(timezone, preferred_time)):
+                entries = get_weekly_entries(phone_number)
+                send_weekly_summary(email, entries)
+        except Exception as e:
+            print(f"Error in weekly job for {phone_number}: {e}")
 
 @app.route("/sms", methods=['POST'])
 def sms_webhook():
@@ -81,12 +128,11 @@ def sms_webhook():
 def run_scheduler():
     """
     Run the scheduler in a separate thread.
-    Schedules:
-    1. Daily prompts at 9:00 AM
-    2. Weekly summaries on Sundays at 9:00 AM
+    Checks every minute if it's time to send prompts to any users.
     """
-    schedule.every().day.at("09:00").do(daily_job)
-    schedule.every().sunday.at("09:00").do(weekly_job)
+    # Check every minute for users who should receive prompts
+    schedule.every(1).minutes.do(daily_job)
+    schedule.every(1).minutes.do(weekly_job)
     
     while True:
         schedule.run_pending()

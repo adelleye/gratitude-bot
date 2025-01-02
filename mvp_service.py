@@ -35,6 +35,10 @@ def init_db():
     conn = sqlite3.connect("gratitude.db")
     c = conn.cursor()
     
+    # Drop existing tables if they exist
+    c.execute("DROP TABLE IF EXISTS entries")
+    c.execute("DROP TABLE IF EXISTS users")
+    
     # Create entries table for storing gratitude responses
     c.execute("""
     CREATE TABLE IF NOT EXISTS entries (
@@ -50,9 +54,18 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         phone_number TEXT PRIMARY KEY,
         email TEXT NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'America/New_York',
+        preferred_time TIME NOT NULL DEFAULT '19:00',
         active BOOLEAN DEFAULT TRUE
     )
     """)
+    
+    # Add your user back to the database
+    c.execute("""
+    INSERT OR REPLACE INTO users (phone_number, email, timezone, preferred_time, active)
+    VALUES (?, ?, ?, ?, ?)
+    """, ('+16478346590', 'loba.adeleye@yahoo.com', 'America/New_York', '20:00', True))
+    
     conn.commit()
     conn.close()
 

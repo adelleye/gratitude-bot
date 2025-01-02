@@ -1,7 +1,7 @@
 # Gratitude Journaling Bot
 
 A simple but powerful SMS-based gratitude journaling bot that helps users cultivate daily gratitude through:
-- Daily AI-generated prompts via SMS
+- Daily AI-generated prompts via SMS at their preferred time
 - Easy response collection via text message
 - Weekly email summaries of gratitude entries
 
@@ -10,6 +10,7 @@ A simple but powerful SMS-based gratitude journaling bot that helps users cultiv
 - 📱 Daily SMS prompts using Twilio
 - 🤖 AI-generated prompts using DeepSeek
 - 📧 Weekly email summaries
+- 🔒 Timezone-aware scheduling (prompts sent at user's preferred time)
 - 🔒 Privacy-focused (each user's entries are private)
 - ⚡ Easy unsubscribe with "STOP" message
 
@@ -41,13 +42,34 @@ A simple but powerful SMS-based gratitude journaling bot that helps users cultiv
 
 5. Add users to the database:
    ```sql
-   INSERT INTO users (phone_number, email, active) 
-   VALUES ('+1234567890', 'user@example.com', TRUE);
+   INSERT INTO users (phone_number, email, timezone, preferred_time, active) 
+   VALUES (
+       '+1234567890',           -- User's phone number
+       'user@example.com',      -- Email for weekly summaries
+       'America/New_York',      -- User's timezone
+       '20:00',                 -- Preferred time (24-hour format)
+       TRUE
+   );
    ```
 
 6. Run the application:
    ```bash
    python main.py
+   ```
+
+## Testing
+
+You can test the SMS functionality in two ways:
+
+1. Force immediate sending (bypass time check):
+   ```python
+   from main import daily_job
+   daily_job(force=True)  # Sends immediately
+   ```
+
+2. Test real-time behavior:
+   ```python
+   daily_job()  # Only sends if it's the user's preferred time ±2 minutes
    ```
 
 ## Architecture
@@ -56,13 +78,15 @@ A simple but powerful SMS-based gratitude journaling bot that helps users cultiv
 - `mvp_service.py`: Core functionality (database, SMS, email, AI prompts)
 - SQLite database with two tables:
   - `entries`: Stores gratitude journal entries
-  - `users`: Manages user subscriptions
+  - `users`: Manages user subscriptions and preferences
 
 ## Deployment
 
 The bot is designed to be deployed on Replit, but can be deployed anywhere with Python support. Note that on Replit:
 - The SQLite database is ephemeral (wiped on redeploy)
 - Consider using ReplDB or an external database for permanent storage
+- The scheduler runs every minute to check each user's preferred time
+- Weekly summaries are sent on Sundays at the user's preferred time
 
 ## Contributing
 
