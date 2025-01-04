@@ -29,10 +29,13 @@ def is_replit_env():
     """Check if we're running on Replit."""
     return os.environ.get('REPL_ID') is not None
 
-def init_db():
+def init_db(skip_example=False):
     """
     Initialize database (SQLite for local dev, ReplDB for production).
     Creates necessary tables/keys if they don't exist.
+    
+    Args:
+        skip_example (bool): If True, skip adding example user (useful for testing)
     """
     if is_replit_env():
         # Initialize ReplDB structure
@@ -42,15 +45,16 @@ def init_db():
             repl_db['entries'] = []
             
         # Add example user if not exists (for demonstration)
-        users = repl_db['users']
-        if not users:  # Only add example if no users exist
-            users['+1234567890'] = {
-                'email': 'example@email.com',
-                'timezone': 'America/New_York',
-                'preferred_time': '20:00',
-                'active': True
-            }
-            repl_db['users'] = users
+        if not skip_example:
+            users = repl_db['users']
+            if not users:  # Only add example if no users exist
+                users['+1234567890'] = {
+                    'email': 'example@email.com',
+                    'timezone': 'America/New_York',
+                    'preferred_time': '20:00',
+                    'active': True
+                }
+                repl_db['users'] = users
     else:
         # Use SQLite for local development
         conn = sqlite3.connect("gratitude.db")
@@ -79,10 +83,11 @@ def init_db():
         """)
         
         # Add example user (for demonstration)
-        c.execute("""
-        INSERT OR REPLACE INTO users (phone_number, email, timezone, preferred_time, active)
-        VALUES (?, ?, ?, ?, ?)
-        """, ('+1234567890', 'example@email.com', 'America/New_York', '20:00', True))
+        if not skip_example:
+            c.execute("""
+            INSERT OR REPLACE INTO users (phone_number, email, timezone, preferred_time, active)
+            VALUES (?, ?, ?, ?, ?)
+            """, ('+1234567890', 'example@email.com', 'America/New_York', '20:00', True))
         
         conn.commit()
         conn.close()
@@ -278,3 +283,41 @@ Keep cultivating gratitude! See you next week.
     except Exception as e:
         print(f"Error sending email: {e}")
         return False 
+
+def get_recent_entries(phone_number, days=7):
+    """
+    Get recent entries for a user.
+    
+    Args:
+        phone_number (str): User's phone number
+        days (int): Number of days to look back (default: 7)
+        
+    Returns:
+        list: List of (entry_text, timestamp) tuples
+    """
+    if is_replit_env():
+        entries = repl_db.get('entries', [])
+        cutoff = datetime.now() - timedelta(days=days)
+        
+        user_entries = []
+        for entry in entries:
+            if (entry['phone_number'] == phone_number and
+                datetime.fromisoformat(entry['timestamp']) >= cutoff):
+                user_entries.append((
+                    entry['entry_text'],
+                    entry['timestamp']
+                ))
+        return sorted(user_entries, key=lambda x: x[1], reverse=True)
+    else:
+        conn = sqlite3.connect("gratitude.db")
+        c = conn.cursor()
+        c.execute("""
+        SELECT entry_text, timestamp 
+        FROM entries 
+        WHERE phone_number = ? 
+        AND timestamp >= date('now', ?) 
+        ORDER BY timestamp DESC
+        """, (phone_number, f'-{days} days'))
+        entries = c.fetchall()
+        conn.close()
+        return entries 
