@@ -3,5 +3,6 @@ twilio==8.10.0
 requests==2.31.0
 schedule==1.2.1
 openai>=1.0.0
-Flask==3.0.0
-pytz==2023.3 
+Flask>=2.0.0,<3.0.0
+pytz==2023.3
+replit>=3.3.0 

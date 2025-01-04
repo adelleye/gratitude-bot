@@ -5,11 +5,13 @@ Handles database operations, SMS interactions, and email summaries.
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from twilio.rest import Client
 from openai import OpenAI
 from email.mime.text import MIMEText
 import smtplib
+import json
+from replit import db as repl_db
 
 # Initialize Twilio client for SMS functionality
 twilio_client = Client(
@@ -18,56 +20,161 @@ twilio_client = Client(
 )
 
 # Initialize DeepSeek client for AI-generated prompts
-# Using OpenAI's SDK with DeepSeek's API for compatibility
 deepseek_client = OpenAI(
     api_key=os.environ.get('DEEPSEEK_API_KEY'),
     base_url="https://api.deepseek.com"
 )
 
+def is_replit_env():
+    """Check if we're running on Replit."""
+    return os.environ.get('REPL_ID') is not None
+
 def init_db():
     """
-    Initialize SQLite database with two tables:
-    1. entries: Stores user's gratitude journal entries
-    2. users: Stores user information and preferences
-    
-    Note: On Replit, database will be wiped on redeploy
+    Initialize database (SQLite for local dev, ReplDB for production).
+    Creates necessary tables/keys if they don't exist.
     """
-    conn = sqlite3.connect("gratitude.db")
-    c = conn.cursor()
-    
-    # Drop existing tables if they exist
-    c.execute("DROP TABLE IF EXISTS entries")
-    c.execute("DROP TABLE IF EXISTS users")
-    
-    # Create entries table for storing gratitude responses
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        phone_number TEXT NOT NULL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        entry_text TEXT NOT NULL
-    )
-    """)
-    
-    # Create users table for managing subscriptions
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        phone_number TEXT PRIMARY KEY,
-        email TEXT NOT NULL,
-        timezone TEXT NOT NULL DEFAULT 'America/New_York',
-        preferred_time TIME NOT NULL DEFAULT '19:00',
-        active BOOLEAN DEFAULT TRUE
-    )
-    """)
-    
-    # Add your user back to the database
-    c.execute("""
-    INSERT OR REPLACE INTO users (phone_number, email, timezone, preferred_time, active)
-    VALUES (?, ?, ?, ?, ?)
-    """, ('+16478346590', 'loba.adeleye@yahoo.com', 'America/New_York', '20:00', True))
-    
-    conn.commit()
-    conn.close()
+    if is_replit_env():
+        # Initialize ReplDB structure
+        if 'users' not in repl_db:
+            repl_db['users'] = {}
+        if 'entries' not in repl_db:
+            repl_db['entries'] = []
+            
+        # Add example user if not exists (for demonstration)
+        users = repl_db['users']
+        if not users:  # Only add example if no users exist
+            users['+1234567890'] = {
+                'email': 'example@email.com',
+                'timezone': 'America/New_York',
+                'preferred_time': '20:00',
+                'active': True
+            }
+            repl_db['users'] = users
+    else:
+        # Use SQLite for local development
+        conn = sqlite3.connect("gratitude.db")
+        c = conn.cursor()
+        
+        c.execute("DROP TABLE IF EXISTS entries")
+        c.execute("DROP TABLE IF EXISTS users")
+        
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            entry_text TEXT NOT NULL
+        )
+        """)
+        
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            phone_number TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            timezone TEXT NOT NULL DEFAULT 'America/New_York',
+            preferred_time TIME NOT NULL DEFAULT '19:00',
+            active BOOLEAN DEFAULT TRUE
+        )
+        """)
+        
+        # Add example user (for demonstration)
+        c.execute("""
+        INSERT OR REPLACE INTO users (phone_number, email, timezone, preferred_time, active)
+        VALUES (?, ?, ?, ?, ?)
+        """, ('+1234567890', 'example@email.com', 'America/New_York', '20:00', True))
+        
+        conn.commit()
+        conn.close()
+
+def get_all_active_users():
+    """Get all active users from the database."""
+    if is_replit_env():
+        users = repl_db['users']
+        active_users = []
+        for phone, data in users.items():
+            if data.get('active', True):
+                active_users.append((
+                    phone,
+                    data['email'],
+                    data['timezone'],
+                    data['preferred_time']
+                ))
+        return active_users
+    else:
+        conn = sqlite3.connect("gratitude.db")
+        c = conn.cursor()
+        c.execute("""
+            SELECT phone_number, email, timezone, preferred_time 
+            FROM users 
+            WHERE active = TRUE
+        """)
+        users = c.fetchall()
+        conn.close()
+        return users
+
+def insert_entry(phone_number, text):
+    """Store a gratitude journal entry."""
+    if is_replit_env():
+        entries = repl_db['entries']
+        entry = {
+            'phone_number': phone_number,
+            'timestamp': datetime.now().isoformat(),
+            'entry_text': text
+        }
+        entries.append(entry)
+        repl_db['entries'] = entries
+    else:
+        conn = sqlite3.connect("gratitude.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO entries (phone_number, entry_text) VALUES (?, ?)", 
+                (phone_number, text))
+        conn.commit()
+        conn.close()
+
+def get_weekly_entries(phone_number):
+    """Get the last 7 days of entries for a user."""
+    if is_replit_env():
+        entries = repl_db['entries']
+        one_week_ago = datetime.now() - timedelta(days=7)
+        
+        user_entries = []
+        for entry in entries:
+            if (entry['phone_number'] == phone_number and
+                datetime.fromisoformat(entry['timestamp']) >= one_week_ago):
+                user_entries.append((
+                    entry['entry_text'],
+                    entry['timestamp']
+                ))
+        return user_entries
+    else:
+        conn = sqlite3.connect("gratitude.db")
+        c = conn.cursor()
+        c.execute("""
+        SELECT entry_text, timestamp 
+        FROM entries 
+        WHERE phone_number = ? 
+        AND timestamp >= date('now', '-7 days')
+        ORDER BY timestamp DESC
+        """, (phone_number,))
+        entries = c.fetchall()
+        conn.close()
+        return entries
+
+def update_user_status(phone_number, active):
+    """Update user's active status."""
+    if is_replit_env():
+        users = repl_db['users']
+        if phone_number in users:
+            users[phone_number]['active'] = active
+            repl_db['users'] = users
+    else:
+        conn = sqlite3.connect("gratitude.db")
+        c = conn.cursor()
+        c.execute("UPDATE users SET active = ? WHERE phone_number = ?", 
+                 (active, phone_number))
+        conn.commit()
+        conn.close()
 
 def get_daily_prompt():
     """
@@ -129,44 +236,6 @@ def send_sms(to_number, body):
     except Exception as e:
         print(f"Error sending SMS: {e}")
         return None
-
-def insert_entry(phone_number, text):
-    """
-    Store a gratitude journal entry in the database.
-    
-    Args:
-        phone_number (str): User's phone number
-        text (str): Gratitude entry text
-    """
-    conn = sqlite3.connect("gratitude.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO entries (phone_number, entry_text) VALUES (?, ?)", 
-              (phone_number, text))
-    conn.commit()
-    conn.close()
-
-def get_weekly_entries(phone_number):
-    """
-    Retrieve the last 7 days of entries for a user.
-    
-    Args:
-        phone_number (str): User's phone number
-    
-    Returns:
-        list: List of (entry_text, timestamp) tuples
-    """
-    conn = sqlite3.connect("gratitude.db")
-    c = conn.cursor()
-    c.execute("""
-    SELECT entry_text, timestamp 
-    FROM entries 
-    WHERE phone_number = ? 
-    AND timestamp >= date('now', '-7 days')
-    ORDER BY timestamp DESC
-    """, (phone_number,))
-    entries = c.fetchall()
-    conn.close()
-    return entries
 
 def send_weekly_summary(email, entries):
     """
